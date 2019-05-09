@@ -23,7 +23,8 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
     private var mediaCount = -1
     private var mediaArray = [Media?]()
     private var thumbMedias = [Media?]()
-	private var fixedMediasArray: [Media]? // Provided via init
+    /// Provided via init
+	private var fixedMediasArray: [Media]?
 	
 	// Views
 	private var pagingScrollView = UIScrollView()
@@ -127,7 +128,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
     public var currentGridContentOffset = CGPoint(x: 0, y: CGFloat.greatestFiniteMagnitude)
     
     /// Set MediaBrowserDelegate for MediaBrowser
-    public var delegate: MediaBrowserDelegate?
+    public weak var delegate: MediaBrowserDelegate?
     
     /// Available zoom photos to fill
     public var zoomPhotosToFill = true
@@ -209,7 +210,15 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
             }
         }
     }
-    
+
+    /**
+     Placeholder image
+     - image: placeholder image
+     - isAppliedForAll: This is indicated whether the placeholder will be showed for all image page or cell.
+                         If you want to use the placeholder image only for one special image page or cell, you should set the **currentIndex** variable.
+     */
+    public var placeholderImage: (image: UIImage, isAppliedForAll: Bool)?
+
     //MARK: - Init
     
     /**
@@ -355,11 +364,22 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         toolbar.tintColor = toolbarTextColor
         toolbar.barTintColor = toolbarBarTintColor
         toolbar.backgroundColor = toolbarBackgroundColor
-        toolbar.alpha = toolbarAlpha
-        toolbar.setBackgroundImage(nil, forToolbarPosition: .any, barMetrics: .default)
-        toolbar.setBackgroundImage(nil, forToolbarPosition: .any, barMetrics: .compact)
+        toolbar.alpha = 1//toolbarAlpha
+        toolbar.setBackgroundImage(UIImage(), forToolbarPosition: .any, barMetrics: .default)
+        toolbar.setBackgroundImage(UIImage(), forToolbarPosition: .any, barMetrics: .compact)
         toolbar.barStyle = .default
         toolbar.autoresizingMask = [.flexibleTopMargin, .flexibleWidth]
+        
+        let toolbarCUSTOM = UIToolbar(frame: frameForToolbar)
+        toolbarCUSTOM.tintColor = toolbarTextColor
+        toolbarCUSTOM.barTintColor = toolbarBarTintColor
+        toolbarCUSTOM.backgroundColor = toolbarBackgroundColor
+        toolbarCUSTOM.alpha = 1//toolbarAlpha
+        toolbarCUSTOM.setBackgroundImage(UIImage(), forToolbarPosition: .any, barMetrics: .default)
+        toolbarCUSTOM.setBackgroundImage(UIImage(), forToolbarPosition: .any, barMetrics: .compact)
+        toolbarCUSTOM.barStyle = .default
+        toolbarCUSTOM.autoresizingMask = [.flexibleTopMargin, .flexibleWidth]
+        self.view.addSubview(toolbarCUSTOM)
         
         // Toolbar Items
         if displayMediaNavigationArrows {
@@ -411,8 +431,34 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
      - Parameter coordinator: UIViewControllerTransitionCoordinator
      */
     public override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
-        coordinator.animate(alongsideTransition: nil) { _ in
+
+        // Remember page index before rotation
+        pageIndexBeforeRotation = currentPageIndex
+        rotating = true
+
+        // In iOS 7 the nav bar gets shown after rotation, but might as well do this for everything!
+        if areControlsHidden {
+            // Force hidden
+            navigationController?.isNavigationBarHidden = true
+        }
+
+        coordinator.animate(alongsideTransition: { (context) in
             self.toolbar.frame = self.frameForToolbar
+
+            // Perform layout
+            self.currentPageIndex = self.pageIndexBeforeRotation
+
+            // Delay control holding
+            self.hideControlsAfterDelay()
+
+            // Layout
+            self.layoutVisiblePages()
+        }) { (context) in
+            self.rotating = false
+            // Ensure nav bar isn't re-displayed
+            if let navi = self.navigationController, self.areControlsHidden {
+                navi.isNavigationBarHidden = true
+            }
         }
         
         super.viewWillTransition(to: size, with: coordinator)
@@ -493,6 +539,8 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
             items.append(flexSpace)
             items.append(nextButton!)
             items.append(flexSpace)
+            let shareButton = UIBarButtonItem(barButtonSystemItem: .action, target: self, action: #selector(self.actionButtonPressed(_:)))
+            items.append(shareButton)
         } else {
             items.append(flexSpace)
         }
@@ -503,7 +551,10 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         } else {
             // We're falset showing the toolbar so try and show in top right
             if actionButton != nil {
-                navigationItem.rightBarButtonItem = actionButton!
+                // only show Action button on top right if this place is empty (no Done button there)
+                if nil == self.navigationItem.rightBarButtonItem {
+                	navigationItem.rightBarButtonItem = actionButton!
+                }
             }
             items.append(fixedSpace)
         }
@@ -680,6 +731,15 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         if parent != nil && hasBelongedToViewController {
             fatalError("MediaBrowser Instance Reuse")
         }
+
+        if let navBar = navigationController?.navigationBar, didSavePreviousStateOfNavBar, parent == nil {
+            navBar.titleTextAttributes = [NSAttributedStringKey.foregroundColor:previousNavigationBarTextColor ?? UIColor.black]
+            navBar.backgroundColor = previousNavigationBarBackgroundColor
+            if previousNavigationBarTintColor != nil {
+                navBar.barTintColor = previousNavigationBarTintColor
+            }
+            navBar.tintColor = previousNavigationBarTextColor
+        }
     }
     
     /**
@@ -818,43 +878,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         return .all
     }
 
-    /// will rotate to interfaceOrientation
-    public override func willRotate(to toInterfaceOrientation: UIInterfaceOrientation, duration: TimeInterval) {
-        // Remember page index before rotation
-        pageIndexBeforeRotation = currentPageIndex
-        rotating = true
-        
-        // In iOS 7 the nav bar gets shown after rotation, but might as well do this for everything!
-        if areControlsHidden {
-            // Force hidden
-            navigationController?.isNavigationBarHidden = true
-        }
-    }
-    
-    /// will animate rotation
-    public override func willAnimateRotation(to toInterfaceOrientation: UIInterfaceOrientation, duration: TimeInterval) {
-        // Perform layout
-        currentPageIndex = pageIndexBeforeRotation
-        
-        // Delay control holding
-        hideControlsAfterDelay()
-        
-        // Layout
-        layoutVisiblePages()
-    }
-    
-    /// did rotate
-    public override func didRotate(from fromInterfaceOrientation: UIInterfaceOrientation) {
-        rotating = false
-        // Ensure nav bar isn't re-displayed
-        if let navi = navigationController, areControlsHidden {
-            navi.isNavigationBarHidden = false
-            navi.navigationBar.alpha = 0
-        }
-    }
-
     //MARK: - Data
-
     var currentIndex: Int {
         return currentPageIndex
     }
@@ -868,6 +892,8 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         releaseAllUnderlyingPhotos(preserveCurrent: true)
         mediaArray.removeAll()
         thumbMedias.removeAll()
+        
+        if mediaNum < 1 { return }
         
         for _ in 0...(mediaNum - 1) {
             mediaArray.append(nil)
@@ -913,7 +939,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
     func mediaAtIndex(index: Int) -> Media? {
         var media: Media? = nil
         
-        if index < mediaArray.count {
+        if index < mediaArray.count && index >= 0 {
             if mediaArray[index] == nil {
                 if let d = delegate {
                     media = d.media(for: self, at: index)
@@ -921,6 +947,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
                     if nil == media && fixedMediasArray != nil && index < fixedMediasArray!.count {
                         media = fixedMediasArray![index]
                     }
+//                    media?.placeholderImage = self.placeholderImage?.image
                     
                     if media != nil {
                         mediaArray[index] = media
@@ -928,6 +955,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
                 }
             } else {
                 media = mediaArray[index]
+//                media?.placeholderImage = self.placeholderImage?.image
             }
         }
         
@@ -961,7 +989,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
             captionView = d.captionView(for: self, at: index)
             
             if let p = mediaAtIndex(index: index), nil == captionView {
-                if p.caption.characters.count > 0 {
+                if p.caption.count > 0 {
                     captionView = MediaCaptionView(media: p)
                 }
             }
@@ -994,16 +1022,15 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
     }
 
     func image(for media: Media?) -> UIImage? {
-        if let p = media {
-            // Get image or obtain in background
-            if let img = p.underlyingImage {
-                return img
-            } else {
-                p.loadUnderlyingImageAndNotify()
-            }
-        }
-        
-        return nil
+//        if let p = media {
+//            // Get image or obtain in background
+//            if let img = p.underlyingImage {
+//                return img
+//            } else {
+//                p.loadUnderlyingImageAndNotify()
+//            }
+//        }
+        return media?.placeholderImage//self.placeholderImage?.image
     }
 
     func loadAdjacentPhotosIfNecessary(photo: Media) {
@@ -1014,20 +1041,24 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
             if currentPageIndex == pageIndex {
                 if pageIndex > 0  && mediaArray.count >= cachingImageCount {
                     // Preload index - 1
-                    if let media = mediaAtIndex(index: pageIndex - 1) {
-                        if nil == media.underlyingImage {
-                            media.loadUnderlyingImageAndNotify()
-//                            print("Pre-loading image at index \(pageIndex-1)")
+                    for i in 1...cachingImageCount {
+                        if let media = mediaAtIndex(index: pageIndex - i) {
+                            if nil == media.underlyingImage {
+                                media.loadUnderlyingImageAndNotify()
+                                print("Pre-loading image at index \(pageIndex - i)")
+                            }
                         }
                     }
                 }
-                
+
                 if pageIndex < numberOfMedias - 1 {
                     // Preload index + 1
-                    if let media = mediaAtIndex(index: pageIndex + 1) {
-                        if nil == media.underlyingImage {
-                            media.loadUnderlyingImageAndNotify()
-//                            print("Pre-loading image at index \(pageIndex+1)")
+                    for i in 1...cachingImageCount {
+                        if let media = mediaAtIndex(index: pageIndex + i) {
+                            if nil == media.underlyingImage {
+                                media.loadUnderlyingImageAndNotify()
+                                print("Pre-loading image at index \(pageIndex + i)")
+                            }
                         }
                     }
                 }
@@ -1072,21 +1103,21 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
      - Parameter index:  Int
      */
     public func setCurrentIndex(at index: Int) {
-        var internalIndex = 0
+        var internalIndex = index
         let mediaCount = self.numberOfMedias
-        if mediaCount != 0 {
+        if mediaCount == 0 {
+            internalIndex = 0
+        } else {
             if index >= mediaCount {
                 internalIndex = self.numberOfMedias - 1
-            } else {
-                internalIndex = index
             }
-            
-            currentPageIndex = internalIndex
-            if self.isViewLoaded {
-                self.jumpToPageAtIndex(index: internalIndex, animated: false)
-                if !viewIsActive {
-                    self.tilePages()
-                }
+        }
+
+        currentPageIndex = internalIndex
+        if self.isViewLoaded {
+            self.jumpToPageAtIndex(index: internalIndex, animated: false)
+            if !viewIsActive {
+                self.tilePages() // Force tiling if view is not visible
             }
         }
     }
@@ -1169,7 +1200,8 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
                 
                 visiblePages.insert(page)
                 configurePage(page: page, forIndex: index)
-
+//                setPlaceholderForPage(page: page, forIndex: index)
+                
                 pagingScrollView.addSubview(page)
                 
                 // Add caption
@@ -1264,7 +1296,24 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         page.frame = frameForPageAtIndex(index: index)
         page.index = index
         page.photo = mediaAtIndex(index: index)
+        
 //        page.backgroundColor = areControlsHidden ? UIColor.black : UIColor.white
+    }
+
+    func setPlaceholderForPage(page: MediaZoomingScrollView, forIndex index: Int) {
+        if let placeholder = self.placeholderImage {
+            if placeholder.isAppliedForAll || (!placeholder.isAppliedForAll && index == self.currentPageIndex) {
+                if page.photoImageView.image == nil || page.photoImageView.image === placeholder.image {
+                    page.photoImageView.image = self.mediaAtIndex(index: index)?.placeholderImage//self.placeholderImage?.image
+                    page.photoImageView.transform = CGAffineTransform.identity
+                    page.photoImageView.alpha = 0.8
+                    page.alignCenterMedia()
+
+                    // Set zoom to minimum zoom
+                    page.setMaxMinZoomScalesForCurrentBounds()
+                }
+            }
+        }
     }
 
     var dequeueRecycledPage: MediaZoomingScrollView? {
@@ -1479,6 +1528,12 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         if let gc = gridController {
             if gc.selectionMode {
                 self.title = NSLocalizedString("Select Photos", comment: "")
+                if let ab = actionButton {
+                    // only show Action button on top right if this place is empty (no Done button there)
+                    if nil == self.navigationItem.rightBarButtonItem {
+                    	self.navigationItem.rightBarButtonItem = ab
+                    }
+                }
             } else {
                 let photosText: String
                 
@@ -1513,17 +1568,19 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         }
         
         // Disable action button if there is false image or it's a video
-        if let ab = actionButton {
-            let photo = mediaAtIndex(index: currentPageIndex)
-
-            if photo != nil && (photo!.underlyingImage == nil || photo!.isVideo) {
-                ab.isEnabled = false
-                ab.tintColor = UIColor.clear // Tint to hide button
-            } else {
-                ab.isEnabled = true
-                ab.tintColor = nil
-            }
-        }
+//        if let ab = actionButton {
+//            let photo = mediaAtIndex(index: currentPageIndex)
+//
+//            if photo != nil && (photo!.underlyingImage == nil || photo!.isVideo) {
+////                ab.isEnabled = false
+////                ab.tintColor = UIColor.clear // Tint to hide button
+//                ab.isEnabled = true
+//                ab.tintColor = UIColor.white
+//            } else {
+//                ab.isEnabled = true
+//                ab.tintColor = nil
+//            }
+//        }
     }
 
     func jumpToPageAtIndex(index: Int, animated: Bool) {
@@ -1620,8 +1677,16 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         if let player = currentVideoPlayerViewController {
             player.moviePlayer.prepareToPlay()
             player.moviePlayer.shouldAutoplay = true
+            player.moviePlayer.allowsAirPlay = true
             player.moviePlayer.scalingMode = .aspectFit
             player.modalTransitionStyle = .crossDissolve
+            
+            do {
+                try AVAudioSession.sharedInstance().setCategory(AVAudioSessionCategoryPlayback)
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch let error as NSError {
+                print(error)
+            }
         
             // Remove the movie player view controller from the "playback did finish" falsetification observers
             // Observe ourselves so we can get it to use the crossfade transition
@@ -1716,14 +1781,13 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
         // Init grid controller
         gridController = MediaGridViewController()
         
-        if let gc = gridController, let navBar = navigationController?.navigationBar {
+        if let gc = gridController {
             let bounds = view.bounds
-            let naviHeight = navBar.frame.height + UIApplication.shared.statusBarFrame.height
             
             gc.initialContentOffset = currentGridContentOffset
             gc.browser = self
             gc.selectionMode = displaySelectionButtons
-            gc.view.frame = CGRect(x: 0.0, y: naviHeight, width: bounds.width, height: bounds.height - naviHeight)
+            gc.view.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
             gc.view.alpha = 0.0
             
             // Stop specific layout being triggered
@@ -1995,40 +2059,38 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
     //MARK: - Misc
 
     @objc func doneButtonPressed(sender: AnyObject) {
-        // Only if we're modal and there's a done button
-        if doneButton != nil {
-            // See if we actually just want to show/hide grid
-            if enableGrid {
-                if startOnGrid && nil == gridController {
-                    showGrid(animated: true)
-                    return
-                } else if !startOnGrid && gridController != nil {
-                    hideGrid()
-                    return
-                }
+        // See if we actually just want to show/hide grid
+        if enableGrid {
+            if startOnGrid && nil == gridController {
+                showGrid(animated: true)
+                return
+            } else if !startOnGrid && gridController != nil {
+                hideGrid()
+                return
             }
-        
-            // Dismiss view controller
-            // Call delegate method and let them dismiss us
-            if let d = delegate {
-                d.mediaBrowserDidFinishModalPresentation(mediaBrowser: self)
-            }
-            // dismissViewControllerAnimated:true completion:nil]
         }
+    
+        // Dismiss view controller
+        // Call delegate method and let them dismiss us
+        if let d = delegate {
+            d.mediaBrowserDidFinishModalPresentation(mediaBrowser: self)
+        }
+        // dismissViewControllerAnimated:true completion:nil]
     }
 
     //MARK: - Actions
 
     @objc func actionButtonPressed(_ sender: Any) {
-        // Only react when image has loaded
-        if let photo = mediaAtIndex(index: currentPageIndex) {
-            if numberOfMedias > 0 && photo.underlyingImage != nil {
-                // If they have defined a delegate method then just message them
-                // Let delegate handle things
-                if let d = delegate {
-                    d.actionButtonPressed(at: currentPageIndex, in: self)
-                }
+        // Let delegate handle things
+        if let d = delegate {
+            d.actionButtonPressed(at: currentPageIndex, in: self, sender: sender)
+        }
+    }
 
+    internal func defaultActionForMedia(atIndex index: Int) {
+        // Only react when image has loaded
+        if let photo = mediaAtIndex(index: index) {
+            if numberOfMedias > 0 && photo.underlyingImage != nil {
                 // Show activity view controller
                 var items: [Any] = [Any]()
                 if let image = photo.underlyingImage {
@@ -2038,7 +2100,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
                     items.append(photo.caption)
                 }
                 activityViewController = UIActivityViewController(activityItems: items, applicationActivities: nil)
-                
+
                 // Show
                 if let vc = self.activityViewController {
                     vc.completionWithItemsHandler = { [weak self] (activityType, completed, returnedItems, activityError) in
@@ -2051,7 +2113,7 @@ public class MediaBrowser: UIViewController, UIScrollViewDelegate, UIActionSheet
 
                     self.present(vc, animated: true, completion: nil)
                 }
-                
+
                 // Keep controls hidden
                 setControlsHidden(hidden: false, animated: true, permanent: true)
             }
